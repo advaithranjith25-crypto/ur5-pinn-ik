@@ -1,0 +1,46 @@
+<mujoco model="ur5_from_dh">
+  <compiler angle="radian"/>
+  <option gravity="0 0 0"/>
+  <worldbody>
+    <body name="jbody1" pos="0 0 0">
+  <joint name="joint1" type="hinge" axis="0 0 1" range="-6.28 6.28"/>
+  <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.01"/>
+  <body name="lbody1" pos="0.00000000 0 0.08915900" quat="0.70710677 0.70710677 0.00000000 0.00000000">
+<body name="jbody2" pos="0 0 0">
+  <joint name="joint2" type="hinge" axis="0 0 1" range="-6.28 6.28"/>
+  <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.01"/>
+  <body name="lbody2" pos="-0.42500001 0 0.00000000" quat="1.00000000 0.00000000 0.00000000 0.00000000">
+<body name="jbody3" pos="0 0 0">
+  <joint name="joint3" type="hinge" axis="0 0 1" range="-6.28 6.28"/>
+  <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.01"/>
+  <body name="lbody3" pos="-0.39225000 0 0.00000000" quat="1.00000000 0.00000000 0.00000000 0.00000000">
+<body name="jbody4" pos="0 0 0">
+  <joint name="joint4" type="hinge" axis="0 0 1" range="-6.28 6.28"/>
+  <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.01"/>
+  <body name="lbody4" pos="0.00000000 0 0.10915000" quat="0.70710677 0.70710677 0.00000000 0.00000000">
+<body name="jbody5" pos="0 0 0">
+  <joint name="joint5" type="hinge" axis="0 0 1" range="-6.28 6.28"/>
+  <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.01"/>
+  <body name="lbody5" pos="0.00000000 0 0.09465000" quat="0.70710677 -0.70710677 0.00000000 0.00000000">
+<body name="jbody6" pos="0 0 0">
+  <joint name="joint6" type="hinge" axis="0 0 1" range="-6.28 6.28"/>
+  <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.01"/>
+  <body name="lbody6" pos="0.00000000 0 0.08230000" quat="1.00000000 0.00000000 0.00000000 0.00000000">
+
+    <site name="end_effector" pos="0 0 0" size="0.01" rgba="1 0 0 1"/>
+
+      </body>
+</body>
+  </body>
+</body>
+  </body>
+</body>
+  </body>
+</body>
+  </body>
+</body>
+  </body>
+</body>
+
+  </worldbody>
+</mujoco>
