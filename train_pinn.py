@@ -16,9 +16,9 @@ from torch.utils.data import Dataset, DataLoader
 from pinn_model import IKPinn, total_loss, fk_consistency_loss
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EPOCHS = 60
+EPOCHS = 80
 BATCH_SIZE = 256
-LR = 1e-3
+LR = 1.5e-3
 CHECKPOINT_PATH = "pinn_ur5_best.pt"
 
 
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = IKPinn().to(DEVICE)
+    model = IKPinn(hidden_dim=512, n_hidden_layers=6).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 

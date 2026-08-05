@@ -41,7 +41,7 @@ def evaluate(model, pos, quat, split_name):
 
 if __name__ == "__main__":
     ckpt = torch.load(CHECKPOINT_PATH, map_location="cpu")
-    model = IKPinn()
+    model = IKPinn(hidden_dim=512, n_hidden_layers=6)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     print(f"Loaded checkpoint from epoch {ckpt['epoch']} (val_fk={ckpt['val_fk']:.6f})")

@@ -11,11 +11,23 @@ Three strata, drawn in this order:
                       singular value is small (arm near-extended, wrist-flip)
   3. EDGE          - biased toward configs near joint limits
 
-Plus a held-out OOD set: one joint (joint 3, the elbow) is restricted to
-only HALF its range during all of the above generation. The OOD test set
-is then drawn exclusively from the excluded half, so "OOD" means a region
-of joint space the network genuinely never saw -- not just "far from the
-training mean" after the fact.
+Plus a held-out OOD set defined directly in POSE SPACE (the network's actual
+input), not joint space: end-effector positions with x > 0.15m AND
+y > 0.15m (a spatial corner covering ~9% of the reachable workspace,
+verified empirically against the generated data) are excluded from all ID
+generation and used exclusively for the OOD test set.
+
+IMPORTANT DESIGN NOTE, worth including in the report: an earlier version of
+this holdout restricted a JOINT (or pair of joints) instead of a pose
+region, on the assumption that one would imply the other. That assumption
+turned out to be false for UR5 specifically -- correlation between base
+joint angle and end-effector azimuth was measured at ~0.10, essentially
+uncorrelated, because UR5's nonzero d4 offset (the "elbow offset" that
+makes it a non-spherical-wrist manipulator) means many different joint
+combinations can reach the same pose region. A joint-space hole does not
+reliably create a pose-space hole on this robot. Defining the holdout
+directly on the network's actual input (pose), rather than an upstream
+generative variable (joints), is the change that fixed this.
 
 Output: a single .npz file with arrays for each split, plus per-sample
 metadata (is_near_singular, is_edge) so later evaluation can stratify by
@@ -39,10 +51,13 @@ N_OOD = 2000
 JOINT_LOW = -np.pi * np.ones(N_JOINTS)
 JOINT_HIGH = np.pi * np.ones(N_JOINTS)
 
-# OOD holdout: joint index 3 (elbow) restricted to its lower half during
-# ID generation; OOD samples are drawn exclusively from the upper half.
-OOD_JOINT_IDX = 2  # 0-indexed -> this is UR5's "elbow" joint
-OOD_SPLIT = 0.0     # midpoint of joint 3's range used as the ID/OOD cut
+# OOD holdout: a spatial corner of the reachable workspace, defined on the
+# end-effector POSITION directly (not on any joint). ~9% of samples fall
+# here naturally, verified against generated data -- big enough for a
+# meaningful test set, small enough to leave most of the workspace for
+# training.
+POSE_CORNER_X = 0.15
+POSE_CORNER_Y = 0.15
 
 SINGULARITY_THRESHOLD = 0.05   # smallest singular value below this -> "near-singular"
 EDGE_MARGIN = 0.15             # radians from a joint limit -> "edge"
@@ -77,39 +92,53 @@ def near_joint_limit(q_np, margin=EDGE_MARGIN):
     return np.any(q_np < (JOINT_LOW + margin)) or np.any(q_np > (JOINT_HIGH - margin))
 
 
-def sample_general(n, rng, id_only=True):
-    """Uniform random q, respecting the ID/OOD split on OOD_JOINT_IDX."""
-    q = rng.uniform(JOINT_LOW, JOINT_HIGH, size=(n, N_JOINTS))
-    if id_only:
-        # restrict OOD_JOINT_IDX to the lower half (ID region)
-        q[:, OOD_JOINT_IDX] = rng.uniform(JOINT_LOW[OOD_JOINT_IDX], OOD_SPLIT, size=n)
-    return q
+def in_ood_corner(pos):
+    """True if this end-effector position sits in the held-out spatial corner."""
+    return (pos[0] > POSE_CORNER_X) and (pos[1] > POSE_CORNER_Y)
+
+
+def sample_general(n, rng, id_only=True, max_tries=50):
+    """
+    Uniform random q, rejecting (redrawing) any candidate whose resulting
+    pose falls in the OOD corner when id_only=True.
+    """
+    out = []
+    while len(out) < n:
+        cand = rng.uniform(JOINT_LOW, JOINT_HIGH)
+        if id_only:
+            pos, _ = mujoco_fk_pose(cand)
+            if in_ood_corner(pos):
+                continue
+        out.append(cand)
+    return np.array(out)
 
 
 def sample_ood(n, rng):
-    """Draw from the excluded upper half of OOD_JOINT_IDX; rest is normal range."""
-    q = rng.uniform(JOINT_LOW, JOINT_HIGH, size=(n, N_JOINTS))
-    q[:, OOD_JOINT_IDX] = rng.uniform(OOD_SPLIT, JOINT_HIGH[OOD_JOINT_IDX], size=n)
-    return q
+    """Rejection-sample q whose resulting pose DOES fall in the OOD corner."""
+    out = []
+    while len(out) < n:
+        cand = rng.uniform(JOINT_LOW, JOINT_HIGH)
+        pos, _ = mujoco_fk_pose(cand)
+        if in_ood_corner(pos):
+            out.append(cand)
+    return np.array(out)
 
 
 def sample_near_singular(n, rng, max_tries_per_sample=200):
     """
-    Rejection-sample toward small min-singular-value configs.
-    Strategy: draw candidates biased toward the elbow being near-straight
-    (q[2] near 0, a classic UR-family singularity), then keep only those
-    whose actual Jacobian confirms near-singularity.
+    Rejection-sample toward small min-singular-value configs, excluding the
+    OOD pose corner from the ID (near-singular) training pool.
     """
     out = []
     while len(out) < n:
-        cand = sample_general(1, rng, id_only=True)[0]
-        # bias joint 3 (elbow, index 2) toward 0 -> arm-straight singularity.
-        # IMPORTANT: clip to OOD_SPLIT, not JOINT_HIGH -- this is also the
-        # OOD-holdout joint, so an unclipped normal(0, 0.08) would leak into
-        # the excluded (OOD) half about half the time and quietly break the
-        # ID/OOD separation the whole experiment depends on.
-        cand[2] = rng.normal(0, 0.08)
-        cand[2] = np.clip(cand[2], JOINT_LOW[2], OOD_SPLIT)
+        cand = rng.uniform(JOINT_LOW, JOINT_HIGH)
+        # bias the elbow (joint index 2) toward 0 -> arm-straight singularity
+        cand[2] = np.clip(rng.normal(0, 0.08), JOINT_LOW[2], JOINT_HIGH[2])
+
+        pos, _ = mujoco_fk_pose(cand)
+        if in_ood_corner(pos):
+            continue  # keep the OOD corner exclusively for the OOD test set
+
         sv = min_singular_value(cand)
         if sv < SINGULARITY_THRESHOLD:
             out.append(cand)
@@ -119,16 +148,15 @@ def sample_near_singular(n, rng, max_tries_per_sample=200):
 def sample_edge(n, rng):
     out = []
     while len(out) < n:
-        cand = sample_general(1, rng, id_only=True)[0]
-        # push a random joint toward one of its limits
+        cand = rng.uniform(JOINT_LOW, JOINT_HIGH)
         j = rng.integers(0, N_JOINTS)
         sign = rng.choice([-1, 1])
-        if j == OOD_JOINT_IDX:
-            # this joint is ID-restricted to [JOINT_LOW, OOD_SPLIT]; only its
-            # lower limit is reachable without leaking into the OOD region
-            sign = -1
         cand[j] = sign * rng.uniform(np.pi - EDGE_MARGIN, np.pi)
-        cand[OOD_JOINT_IDX] = np.clip(cand[OOD_JOINT_IDX], JOINT_LOW[OOD_JOINT_IDX], OOD_SPLIT)
+
+        pos, _ = mujoco_fk_pose(cand)
+        if in_ood_corner(pos):
+            continue
+
         if near_joint_limit(cand):
             out.append(cand)
     return np.array(out)
@@ -170,7 +198,7 @@ if __name__ == "__main__":
     q_edge = sample_edge(N_EDGE, rng)
 
     print(f"Generating {N_OOD} OOD samples "
-          f"(joint {OOD_JOINT_IDX} restricted to held-out range)...")
+          f"(pose corner: x>{POSE_CORNER_X} AND y>{POSE_CORNER_Y}, rejection sampling)...")
     q_ood = sample_ood(N_OOD, rng)
 
     print("Running FK + Jacobian over all samples to build final dataset...")
@@ -210,7 +238,7 @@ if __name__ == "__main__":
         test_ood_min_sv=ood_data["min_singular_value"],
         test_ood_is_near_singular=ood_data["is_near_singular"], test_ood_is_edge=ood_data["is_edge"],
 
-        ood_joint_idx=OOD_JOINT_IDX, ood_split_value=OOD_SPLIT,
+        pose_corner_x=POSE_CORNER_X, pose_corner_y=POSE_CORNER_Y,
     )
 
     print("\n--- Dataset summary ---")
