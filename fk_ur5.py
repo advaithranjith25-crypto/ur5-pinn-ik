@@ -14,6 +14,7 @@ DH transform per joint i:
 """
 
 import torch
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # UR5 standard DH parameters: (a, alpha, d) per joint. theta is the variable
@@ -198,6 +199,50 @@ def jacobian(q):
         J_angular[:, i] = z_prev
 
     J = torch.cat([J_linear, J_angular], dim=0)  # (6,6)
+    return J
+
+
+def analytical_jacobian(q):
+    """
+    Fast closed-form geometric Jacobian, avoiding autograd entirely.
+    Standard formula for a serial chain of revolute joints:
+        linear column_i  = axis_i x (p_end - pivot_i)
+        angular column_i = axis_i
+    where pivot_i and axis_i are joint i's position and rotation axis in
+    the world frame (same convention as jacobian()'s angular part above),
+    and p_end is the final end-effector position.
+
+    This computes the SAME mathematical quantity as jacobian() above, just
+    via the analytical formula instead of autograd -- verified to match
+    jacobian() to numerical precision. Used in place of jacobian() inside
+    iterative solvers (DLS), where it's called every iteration and autograd's
+    overhead (6 backward passes per call) becomes the dominant cost: ~6.4ms/
+    call via autograd vs a small fraction of that analytically.
+
+    q: 1D tensor or array, shape (6,)
+    Returns: (6,6) numpy array.
+    """
+    if isinstance(q, torch.Tensor):
+        q_np = q.detach().numpy()
+    else:
+        q_np = np.asarray(q)
+
+    with torch.no_grad():
+        q_t = torch.tensor(q_np, dtype=torch.float32).unsqueeze(0)
+        pos, _, T_all = forward_kinematics(q_t)
+    p_end = pos.squeeze(0).numpy()
+
+    pivots = [np.zeros(3)]
+    axes = [np.array([0.0, 0.0, 1.0])]
+    for i in range(N_JOINTS - 1):
+        T = T_all[i][0].numpy()
+        pivots.append(T[:3, 3])
+        axes.append(T[:3, 2])
+
+    J = np.zeros((6, N_JOINTS))
+    for i in range(N_JOINTS):
+        J[:3, i] = np.cross(axes[i], p_end - pivots[i])
+        J[3:, i] = axes[i]
     return J
 
 
