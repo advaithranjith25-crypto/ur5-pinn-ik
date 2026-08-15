@@ -71,17 +71,39 @@ def dls_solve(
     q_init, target_pos, target_quat,
     max_iters=DEFAULT_MAX_ITERS, pos_tol=DEFAULT_POS_TOL, orient_tol=DEFAULT_ORIENT_TOL,
     damping=DEFAULT_DAMPING, step_scale=DEFAULT_STEP_SCALE,
+    stall_patience=15, stall_improve_thresh=0.002, allow_stall_restart=True,
 ):
     """
     Run DLS from q_init toward (target_pos, target_quat).
 
+    STALL DETECTION (see project notes on the "branch-mismatch" finding):
+    a warm-start can land on a valid-but-wrong IK solution branch (e.g.
+    elbow-up when the target actually needs elbow-down), which traps a
+    purely local method like DLS in a basin that asymptotically approaches
+    a NONZERO residual error and never converges -- confirmed empirically
+    by tracing individual failing runs, where position error plateaued at
+    a fixed value and stopped improving entirely rather than oscillating
+    or diverging. If position error hasn't improved by more than
+    stall_improve_thresh (relative) over the last stall_patience iterations,
+    this is detected as a stall and the solve RESTARTS ONCE from a fresh
+    cold-start (q=0), spending the remaining iteration budget there instead
+    of continuing to burn iterations in a basin that provably cannot reach
+    the target. This preserves the speed benefit of a good warm-start on
+    correct-branch cases while recovering most of the success-rate loss on
+    wrong-branch cases.
+
     Returns dict: q_final, n_iters, converged (bool), final_pos_err (m),
-    final_orient_err (rad), wall_time (s).
+    final_orient_err (rad), wall_time (s), restarted (bool, whether the
+    stall-restart triggered on this solve -- useful for diagnosing how often
+    this actually happens per condition).
     """
     import time
     t0 = time.time()
 
     q = np.array(q_init, dtype=np.float64).copy()
+    restarted = False
+    best_pos_err = np.inf
+    iters_since_improvement = 0
 
     for it in range(1, max_iters + 1):
         cur_pos, cur_quat = fk_pose_np(q)
@@ -95,8 +117,23 @@ def dls_solve(
             return {
                 "q_final": q, "n_iters": it - 1, "converged": True,
                 "final_pos_err": pos_err_norm, "final_orient_err": orient_err_norm,
-                "wall_time": time.time() - t0,
+                "wall_time": time.time() - t0, "restarted": restarted,
             }
+
+        # stall detection: track relative improvement in position error
+        if pos_err_norm < best_pos_err * (1 - stall_improve_thresh):
+            best_pos_err = pos_err_norm
+            iters_since_improvement = 0
+        else:
+            iters_since_improvement += 1
+
+        if (allow_stall_restart and not restarted
+                and iters_since_improvement >= stall_patience):
+            q = np.zeros(N_JOINTS, dtype=np.float64)  # cold-start restart
+            restarted = True
+            best_pos_err = np.inf
+            iters_since_improvement = 0
+            continue  # re-evaluate from the fresh start next loop iteration
 
         J = analytical_jacobian(q)  # (6,6)
         error_twist = np.concatenate([pos_err_vec, orient_err_vec])
@@ -115,7 +152,7 @@ def dls_solve(
     return {
         "q_final": q, "n_iters": max_iters, "converged": False,
         "final_pos_err": pos_err_norm, "final_orient_err": orient_err_norm,
-        "wall_time": time.time() - t0,
+        "wall_time": time.time() - t0, "restarted": restarted,
     }
 
 
